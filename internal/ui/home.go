@@ -319,6 +319,9 @@ type Home struct {
 	// System theme watcher (active when theme="system"; nil otherwise)
 	themeWatcher *ThemeWatcher
 
+	// Tab strip overlay (nil if disabled)
+	tabStrip *TabStripModel
+
 	// Storage warning (shown if storage initialization failed)
 	storageWarning string
 
@@ -595,10 +598,17 @@ type updateCheckMsg struct {
 }
 
 type (
-	tickMsg        time.Time
-	quitMsg        bool
-	reviverTickMsg struct{}
+	tickMsg         time.Time
+	tabStripTickMsg time.Time
+	quitMsg         bool
+	reviverTickMsg  struct{}
 )
+
+func tabStripTick() tea.Cmd {
+	return tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
+		return tabStripTickMsg(t)
+	})
+}
 
 // previewFetchedMsg is sent when async preview content is ready
 type previewFetchedMsg struct {
@@ -816,6 +826,12 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		h.activeFilterExcludes = cfg.Display.GetActiveFilterExcludes()
 		h.sysStatsConfig = cfg.SystemStats
 		h.costLineTemplate, h.costLineHideWhenZero = session.ResolveCostLineTemplate(cfg, actualProfile)
+
+		// Initialize tab strip if enabled
+		tsConfig := cfg.TabStrip.TabStripConfig()
+		if tsConfig.GetEnabled() {
+			h.tabStrip = NewTabStrip(tsConfig.Layout, tsConfig.Width, tsConfig.GetShowHotkeyHints())
+		}
 	} else {
 		h.fullRepaint = (session.DisplaySettings{}).GetFullRepaint()
 		h.activeFilterExcludes = (session.DisplaySettings{}).GetActiveFilterExcludes()
@@ -1835,6 +1851,11 @@ func (h *Home) Init() tea.Cmd {
 		h.reviverTick(),
 		h.checkForUpdate(),
 		h.fetchRemoteSessions,
+	}
+
+	// Start tab strip animation tick
+	if h.tabStrip != nil {
+		cmds = append(cmds, tabStripTick())
 	}
 
 	// Start listening for storage changes
@@ -4677,6 +4698,13 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
+	case tabStripTickMsg:
+		if h.tabStrip != nil {
+			h.tabStrip.Tick()
+			return h, tabStripTick()
+		}
+		return h, nil
+
 	case watcherEventMsg:
 		// One-shot log per engine instance to confirm the listener path is alive.
 		h.firstWatcherEventOnce.Do(func() {
@@ -4748,6 +4776,13 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				h.triggerStatusUpdate()
 			}
 			// User idle - no updates needed (cache refresh happens in background worker)
+		}
+
+		// Sync tab strip with current instances
+		if h.tabStrip != nil {
+			h.instancesMu.RLock()
+			h.tabStrip.UpdateInstances(h.instances)
+			h.instancesMu.RUnlock()
 		}
 
 		// Update animation frame for launching spinner (8 frames, cycles every tick)
@@ -6016,6 +6051,34 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else if item.Type == session.ItemTypeRemoteSession && item.RemoteSession != nil {
 				// Attach to remote session via SSH
 				return h, h.attachRemoteSession(item.RemoteName, item.RemoteSession.ID)
+			}
+		}
+		return h, nil
+
+	case "alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9":
+		if h.tabStrip != nil {
+			idx := int(key[4] - '1') // "alt+1" -> 0, "alt+2" -> 1, etc.
+			h.tabStrip.SelectTab(idx)
+			if inst := h.tabStrip.SelectedInstance(); inst != nil && inst.Exists() {
+				return h, h.attachSession(inst)
+			}
+		}
+		return h, nil
+
+	case "alt+]":
+		if h.tabStrip != nil {
+			h.tabStrip.NextTab()
+			if inst := h.tabStrip.SelectedInstance(); inst != nil && inst.Exists() {
+				return h, h.attachSession(inst)
+			}
+		}
+		return h, nil
+
+	case "alt+[":
+		if h.tabStrip != nil {
+			h.tabStrip.PrevTab()
+			if inst := h.tabStrip.SelectedInstance(); inst != nil && inst.Exists() {
+				return h, h.attachSession(inst)
 			}
 		}
 		return h, nil
