@@ -2034,3 +2034,60 @@ active_filter_excludes = ["error", "stopped"]
 		t.Errorf("running should not be excluded, got %v", got)
 	}
 }
+
+// ============================================================================
+// TabStrip Settings Tests
+// ============================================================================
+
+func TestTabStripSettings_Defaults(t *testing.T) {
+	settings := TabStripSettings{}
+	cfg := settings.TabStripConfig()
+
+	if !cfg.GetEnabled() {
+		t.Error("TabStrip should be enabled by default")
+	}
+	if cfg.Layout != "vertical" {
+		t.Errorf("TabStrip Layout default = %q, want %q", cfg.Layout, "vertical")
+	}
+	if cfg.Width != 15 {
+		t.Errorf("TabStrip Width default = %d, want 15", cfg.Width)
+	}
+	if !cfg.GetShowHotkeyHints() {
+		t.Error("TabStrip ShowHotkeyHints should default to true")
+	}
+}
+
+func TestTabStripSettings_TOMLParsing(t *testing.T) {
+	tmpDir := t.TempDir()
+	configContent := `
+[tab_strip]
+enabled = false
+layout = "horizontal"
+width = 20
+show_hotkey_hints = false
+`
+	configPath := filepath.Join(tmpDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	var config UserConfig
+	if _, err := toml.DecodeFile(configPath, &config); err != nil {
+		t.Fatalf("Failed to decode: %v", err)
+	}
+
+	cfg := config.TabStrip.TabStripConfig()
+
+	if cfg.GetEnabled() {
+		t.Error("TabStrip Enabled should be false when set to false")
+	}
+	if cfg.Layout != "horizontal" {
+		t.Errorf("TabStrip Layout = %q, want %q", cfg.Layout, "horizontal")
+	}
+	if cfg.Width != 20 {
+		t.Errorf("TabStrip Width = %d, want 20", cfg.Width)
+	}
+	if cfg.GetShowHotkeyHints() {
+		t.Error("TabStrip ShowHotkeyHints should be false when set to false")
+	}
+}
