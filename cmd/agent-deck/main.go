@@ -352,6 +352,9 @@ func main() {
 		case "fork-request":
 			handleForkRequest(args[1:])
 			return
+		case "mark-unread":
+			handleMarkUnread(args[1:])
+			return
 		}
 	}
 
