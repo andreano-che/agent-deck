@@ -9490,7 +9490,9 @@ func (h *Home) cleanupTabStrip(sessionName string) {
 	if err == nil {
 		_ = os.Remove(filepath.Join(homeDir, ".agent-deck", "tab_current"))
 		_ = os.Remove(filepath.Join(homeDir, ".agent-deck", "tab_switch_request"))
-		_ = os.Remove(filepath.Join(homeDir, ".agent-deck", "fork_request"))
+		// NOTE: fork_request is NOT cleaned here — it's cleaned in the tea.Exec callback
+		// after being read. cleanupTabStrip runs on every detach (including fork-triggered
+		// detaches) and would race with the callback reading the file.
 	}
 }
 

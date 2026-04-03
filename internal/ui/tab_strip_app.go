@@ -99,6 +99,12 @@ func (a *TabStripApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case instancesLoadedMsg:
 		a.tabStrip.UpdateInstances(msg.instances)
+		// Update unread state from acknowledged flags
+		ackMap := make(map[string]bool, len(msg.instances))
+		for _, inst := range msg.instances {
+			ackMap[inst.ID] = inst.IsAcknowledged()
+		}
+		a.tabStrip.UpdateUnreadState(ackMap)
 		// Update selection based on currentID
 		a.syncSelection()
 	}
@@ -145,6 +151,9 @@ func (a *TabStripApp) loadInstances() tea.Msg {
 		}
 	}
 
+	// Read acknowledged state for unread markers
+	statuses, _ := a.db.ReadAllStatuses()
+
 	instances := make([]*session.Instance, 0, len(rows))
 	for _, r := range rows {
 		inst := &session.Instance{
@@ -156,6 +165,10 @@ func (a *TabStripApp) loadInstances() tea.Msg {
 			Order:       r.Order,
 			GroupPath:   r.GroupPath,
 			CreatedAt:   r.CreatedAt,
+		}
+		// Mark as acknowledged based on SQLite state
+		if sr, ok := statuses[r.ID]; ok && sr.Acknowledged {
+			inst.SetAcknowledgedFromShared(true)
 		}
 		instances = append(instances, inst)
 	}
