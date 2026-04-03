@@ -201,6 +201,7 @@ type Home struct {
 	groupDialog          *GroupDialog          // For creating/renaming groups
 	forkDialog           *ForkDialog           // For forking sessions
 	quickForkPrompt      *QuickForkPrompt      // For quick fork with name prompt
+	forkRequestSource    *session.Instance      // Source session for pending attach-mode fork
 	confirmDialog        *ConfirmDialog        // For confirming destructive actions
 	helpOverlay          *HelpOverlay          // For showing keyboard shortcuts
 	mcpDialog            *MCPDialog            // For managing MCPs
@@ -574,6 +575,11 @@ type sessionForkedMsg struct {
 	instance *session.Instance
 	sourceID string // ID of the source session that was forked (for cleanup)
 	err      error
+}
+
+// forkRequestMsg is sent when the user pressed Alt+F in attach mode.
+type forkRequestMsg struct {
+	sourceID string
 }
 
 type refreshMsg struct{}
@@ -3874,64 +3880,94 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return h, nil
 
-	case QuickForkMsg:
-		if h.cursor < len(h.flatItems) {
-			item := h.flatItems[h.cursor]
-			if item.Type == session.ItemTypeSession && item.Session != nil && item.Session.CanFork() {
-				h.quickForkPrompt.Hide()
-				source := item.Session
-				title := msg.Name
-				groupPath := source.GroupPath
-				slug := slugify(msg.Name)
-				branchName := "fork/" + slug
-
-				// Load default options from config
-				var opts *session.ClaudeOptions
-				if config, err := session.LoadUserConfig(); err == nil {
-					panel := NewClaudeOptionsPanelForFork()
-					panel.SetDefaults(config)
-					opts = panel.GetOptions()
-				}
-				if opts == nil {
-					opts = &session.ClaudeOptions{}
-				}
-
-				// Set up worktree if git repo
-				if git.IsGitRepo(source.ProjectPath) {
-					repoRoot, err := git.GetWorktreeBaseRoot(source.ProjectPath)
-					if err != nil {
-						h.setError(fmt.Errorf("failed to get repo root: %v", err))
-						return h, nil
-					}
-
-					// Deduplicate branch name
-					for i := 2; git.BranchExists(repoRoot, branchName); i++ {
-						branchName = fmt.Sprintf("fork/%s-%d", slug, i)
-					}
-
-					wtSettings := session.GetWorktreeSettings()
-					worktreePath := git.WorktreePath(git.WorktreePathOptions{
-						Branch:    branchName,
-						Location:  wtSettings.DefaultLocation,
-						RepoDir:   repoRoot,
-						SessionID: git.GeneratePathID(),
-						Template:  wtSettings.Template(),
-					})
-
-					opts.WorkDir = worktreePath
-					opts.WorktreePath = worktreePath
-					opts.WorktreeRepoRoot = repoRoot
-					opts.WorktreeBranch = branchName
-				}
-
-				return h, h.forkSessionCmdWithOptions(source, title, groupPath, opts, false)
+	case forkRequestMsg:
+		// Alt+F was pressed in attach mode — find source and show prompt
+		h.instancesMu.RLock()
+		for _, inst := range h.instances {
+			if inst.ID == msg.sourceID {
+				h.forkRequestSource = inst
+				break
 			}
 		}
-		h.quickForkPrompt.SetError("no forkable session selected")
+		h.instancesMu.RUnlock()
+		if h.forkRequestSource != nil && h.forkRequestSource.CanFork() {
+			h.quickForkPrompt.SetWidth(h.width)
+			h.quickForkPrompt.Show()
+		}
 		return h, nil
+
+	case QuickForkMsg:
+		h.quickForkPrompt.Hide()
+
+		// Determine source: forkRequestSource (attach mode) or cursor selection (Home)
+		var source *session.Instance
+		if h.forkRequestSource != nil {
+			source = h.forkRequestSource
+			h.forkRequestSource = nil
+		} else if h.cursor < len(h.flatItems) {
+			item := h.flatItems[h.cursor]
+			if item.Type == session.ItemTypeSession && item.Session != nil && item.Session.CanFork() {
+				source = item.Session
+			}
+		}
+
+		if source == nil {
+			return h, nil
+		}
+
+		title := msg.Name
+		groupPath := source.GroupPath
+		slug := slugify(msg.Name)
+		branchName := "fork/" + slug
+
+		// Load default options from config
+		var opts *session.ClaudeOptions
+		if config, err := session.LoadUserConfig(); err == nil {
+			panel := NewClaudeOptionsPanelForFork()
+			panel.SetDefaults(config)
+			opts = panel.GetOptions()
+		}
+		if opts == nil {
+			opts = &session.ClaudeOptions{}
+		}
+
+		// Set up worktree if git repo
+		if git.IsGitRepo(source.ProjectPath) {
+			repoRoot, err := git.GetWorktreeBaseRoot(source.ProjectPath)
+			if err != nil {
+				h.setError(fmt.Errorf("failed to get repo root: %v", err))
+				return h, nil
+			}
+
+			// Deduplicate branch name
+			for i := 2; git.BranchExists(repoRoot, branchName); i++ {
+				branchName = fmt.Sprintf("fork/%s-%d", slug, i)
+			}
+
+			wtSettings := session.GetWorktreeSettings()
+			worktreePath := git.WorktreePath(git.WorktreePathOptions{
+				Branch:    branchName,
+				Location:  wtSettings.DefaultLocation,
+				RepoDir:   repoRoot,
+				SessionID: git.GeneratePathID(),
+				Template:  wtSettings.Template(),
+			})
+
+			opts.WorkDir = worktreePath
+			opts.WorktreePath = worktreePath
+			opts.WorktreeRepoRoot = repoRoot
+			opts.WorktreeBranch = branchName
+		}
+
+		return h, h.forkSessionCmdWithOptions(source, title, groupPath, opts, false)
 
 	case QuickForkCancelMsg:
 		h.quickForkPrompt.Hide()
+		if h.forkRequestSource != nil {
+			source := h.forkRequestSource
+			h.forkRequestSource = nil
+			return h, h.attachSession(source)
+		}
 		return h, nil
 
 	case sessionForkedMsg:
@@ -3999,8 +4035,8 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Use forceSave to bypass mtime check - forked session MUST persist
 			h.forceSaveInstances()
 
-			// Start fetching preview for the forked session
-			return h, h.fetchPreview(msg.instance, msg.instance.ID, -1)
+			// Auto-attach to the newly forked session
+			return h, h.attachSession(msg.instance)
 		}
 		return h, nil
 
@@ -6396,7 +6432,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case "f":
-		// Quick fork with name prompt
+		// Quick fork session (same title with " (fork)" suffix)
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil {
@@ -6405,8 +6441,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return h, nil
 				}
 				if item.Session.CanFork() {
-					h.quickForkPrompt.SetWidth(h.width)
-					h.quickForkPrompt.Show()
+					return h, h.quickForkSession(item.Session)
 				}
 			}
 		}
@@ -8887,6 +8922,16 @@ func (h *Home) forkSessionWithDialog(source *session.Instance) tea.Cmd {
 	return nil
 }
 
+// quickForkSession performs a quick fork with default title suffix " (fork)"
+func (h *Home) quickForkSession(source *session.Instance) tea.Cmd {
+	if source == nil {
+		return nil
+	}
+	title := source.Title + " (fork)"
+	groupPath := source.GroupPath
+	return h.forkSessionCmd(source, title, groupPath)
+}
+
 // forkSessionCmd creates a forked session with the given title and group
 // Shows immediate UI feedback by tracking the source session in forkingSessions
 func (h *Home) forkSessionCmd(source *session.Instance, title, groupPath, parentSessionID, parentProjectPath string) tea.Cmd {
@@ -9387,6 +9432,17 @@ func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 					}
 				}
 				h.instancesMu.RUnlock()
+			}
+
+			// Check for fork request (Alt+F was pressed)
+			forkFile := filepath.Join(homeDir, ".agent-deck", "fork_request")
+			forkData, forkErr := os.ReadFile(forkFile)
+			if forkErr == nil && len(forkData) > 0 {
+				sourceID := strings.TrimSpace(string(forkData))
+				_ = os.Remove(forkFile)
+				h.cleanupTabStrip(tmuxSess.Name)
+				h.isAttaching.Store(false)
+				return forkRequestMsg{sourceID: sourceID}
 			}
 		}
 
