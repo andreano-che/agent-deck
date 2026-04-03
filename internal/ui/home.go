@@ -9350,6 +9350,13 @@ func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 		_ = exec.Command("tmux", "bind-key", "-T", "root", key,
 			"run-shell", cmd).Run()
 	}
+	// Register Alt+F for quick fork and Alt+U for mark unread
+	forkCmd := fmt.Sprintf("%s fork-request --session=%s", exe, inst.ID)
+	_ = exec.Command("tmux", "bind-key", "-T", "root", "M-f",
+		"run-shell", forkCmd).Run()
+	unreadCmd := fmt.Sprintf("%s mark-unread --session=%s", exe, inst.ID)
+	_ = exec.Command("tmux", "bind-key", "-T", "root", "M-u",
+		"run-shell", unreadCmd).Run()
 
 	// Use tea.Exec with a custom command that runs our Attach method
 	// On return, immediately update all session statuses (don't reload from storage
@@ -9418,12 +9425,16 @@ func (h *Home) cleanupTabStrip(sessionName string) {
 		key := fmt.Sprintf("M-%d", i)
 		_ = exec.Command("tmux", "unbind-key", "-T", "root", key).Run()
 	}
+	// Unbind Alt+F and Alt+U
+	_ = exec.Command("tmux", "unbind-key", "-T", "root", "M-f").Run()
+	_ = exec.Command("tmux", "unbind-key", "-T", "root", "M-u").Run()
 
 	// Clean up state files
 	homeDir, err := os.UserHomeDir()
 	if err == nil {
 		_ = os.Remove(filepath.Join(homeDir, ".agent-deck", "tab_current"))
 		_ = os.Remove(filepath.Join(homeDir, ".agent-deck", "tab_switch_request"))
+		_ = os.Remove(filepath.Join(homeDir, ".agent-deck", "fork_request"))
 	}
 }
 
