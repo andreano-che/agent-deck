@@ -349,6 +349,9 @@ func main() {
 		case "tab-switch":
 			handleTabSwitch(args[1:])
 			return
+		case "fork-request":
+			handleForkRequest(args[1:])
+			return
 		}
 	}
 
