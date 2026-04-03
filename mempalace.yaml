@@ -1,0 +1,26 @@
+wing: agent_deck_fork
+rooms:
+- name: cmd
+  description: Files from cmd/
+- name: testing
+  description: Files from tests/
+- name: internal
+  description: Files from internal/
+- name: documentation
+  description: Files from docs/
+- name: sandbox
+  description: Files from sandbox/
+- name: site
+  description: Files from site/
+- name: skills
+  description: Files from skills/
+- name: conductor
+  description: Files from conductor/
+- name: demos
+  description: Files from demos/
+- name: frontend
+  description: Files from ui/
+- name: costs
+  description: Files from costs/
+- name: general
+  description: Files that don't fit other rooms

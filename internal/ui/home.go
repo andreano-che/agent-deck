@@ -200,6 +200,7 @@ type Home struct {
 	newDialog            *NewDialog
 	groupDialog          *GroupDialog          // For creating/renaming groups
 	forkDialog           *ForkDialog           // For forking sessions
+	quickForkPrompt      *QuickForkPrompt      // For quick fork with name prompt
 	confirmDialog        *ConfirmDialog        // For confirming destructive actions
 	helpOverlay          *HelpOverlay          // For showing keyboard shortcuts
 	mcpDialog            *MCPDialog            // For managing MCPs
@@ -763,6 +764,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		newDialog:            NewNewDialog(),
 		groupDialog:          NewGroupDialog(),
 		forkDialog:           NewForkDialog(),
+		quickForkPrompt:      NewQuickForkPrompt(),
 		confirmDialog:        NewConfirmDialog(),
 		helpOverlay:          NewHelpOverlay(),
 		mcpDialog:            NewMCPDialog(),
@@ -3543,7 +3545,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return h, nil
 			}
-			if h.newDialog.IsVisible() || h.forkDialog.IsVisible() {
+			if h.newDialog.IsVisible() || h.forkDialog.IsVisible() || h.quickForkPrompt.IsVisible() {
 				return h, nil
 			}
 			// Preview pane scroll (#574): when the wheel event lands in the
@@ -3869,6 +3871,66 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Start fetching preview for the new session
 			return h, h.fetchPreview(msg.instance, msg.instance.ID, -1)
 		}
+		return h, nil
+
+	case QuickForkMsg:
+		if h.cursor < len(h.flatItems) {
+			item := h.flatItems[h.cursor]
+			if item.Type == session.ItemTypeSession && item.Session != nil && item.Session.CanFork() {
+				h.quickForkPrompt.Hide()
+				source := item.Session
+				title := msg.Name
+				groupPath := source.GroupPath
+				slug := slugify(msg.Name)
+				branchName := "fork/" + slug
+
+				// Load default options from config
+				var opts *session.ClaudeOptions
+				if config, err := session.LoadUserConfig(); err == nil {
+					panel := NewClaudeOptionsPanelForFork()
+					panel.SetDefaults(config)
+					opts = panel.GetOptions()
+				}
+				if opts == nil {
+					opts = &session.ClaudeOptions{}
+				}
+
+				// Set up worktree if git repo
+				if git.IsGitRepo(source.ProjectPath) {
+					repoRoot, err := git.GetWorktreeBaseRoot(source.ProjectPath)
+					if err != nil {
+						h.setError(fmt.Errorf("failed to get repo root: %v", err))
+						return h, nil
+					}
+
+					// Deduplicate branch name
+					for i := 2; git.BranchExists(repoRoot, branchName); i++ {
+						branchName = fmt.Sprintf("fork/%s-%d", slug, i)
+					}
+
+					wtSettings := session.GetWorktreeSettings()
+					worktreePath := git.WorktreePath(git.WorktreePathOptions{
+						Branch:    branchName,
+						Location:  wtSettings.DefaultLocation,
+						RepoDir:   repoRoot,
+						SessionID: git.GeneratePathID(),
+						Template:  wtSettings.Template(),
+					})
+
+					opts.WorkDir = worktreePath
+					opts.WorktreePath = worktreePath
+					opts.WorktreeRepoRoot = repoRoot
+					opts.WorktreeBranch = branchName
+				}
+
+				return h, h.forkSessionCmdWithOptions(source, title, groupPath, opts, false)
+			}
+		}
+		h.quickForkPrompt.SetError("no forkable session selected")
+		return h, nil
+
+	case QuickForkCancelMsg:
+		h.quickForkPrompt.Hide()
 		return h, nil
 
 	case sessionForkedMsg:
@@ -5028,6 +5090,10 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.groupDialog.IsVisible() {
 			return h.handleGroupDialogKey(msg)
 		}
+		if h.quickForkPrompt.IsVisible() {
+			cmd := h.quickForkPrompt.Update(msg)
+			return h, cmd
+		}
 		if h.forkDialog.IsVisible() {
 			return h.handleForkDialogKey(msg)
 		}
@@ -5637,6 +5703,7 @@ func (h *Home) hasModalVisible() bool {
 		h.watcherPanel.IsVisible() || // hotkeyWatcherPanel overlay
 		h.helpOverlay.IsVisible() || h.search.IsVisible() || h.globalSearch.IsVisible() ||
 		h.newDialog.IsVisible() || h.groupDialog.IsVisible() || h.forkDialog.IsVisible() ||
+		h.quickForkPrompt.IsVisible() ||
 		h.confirmDialog.IsVisible() || h.mcpDialog.IsVisible() || h.pluginDialog.IsVisible() || h.skillDialog.IsVisible() ||
 		h.geminiModelDialog.IsVisible() || h.sessionPickerDialog.IsVisible() ||
 		h.worktreeFinishDialog.IsVisible() || h.editPathsDialog.IsVisible() ||
@@ -6315,18 +6382,17 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case "f":
-		// Quick fork session (same title with " (fork)" suffix)
-		// Only available when session has a valid Claude session ID
+		// Quick fork with name prompt
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil {
-				// Block fork during animations to prevent concurrent operations
 				if h.hasActiveAnimation(item.Session.ID) {
 					h.setError(fmt.Errorf("session is starting, please wait..."))
 					return h, nil
 				}
 				if item.Session.CanFork() {
-					return h, h.quickForkSession(item.Session)
+					h.quickForkPrompt.SetWidth(h.width)
+					h.quickForkPrompt.Show()
 				}
 			}
 		}
@@ -8534,15 +8600,6 @@ func applyCreateSessionToolOverrides(inst *session.Instance, tool string, gemini
 	}
 }
 
-// quickForkSession performs a quick fork with default title suffix " (fork)"
-func (h *Home) quickForkSession(source *session.Instance) tea.Cmd {
-	if source == nil {
-		return nil
-	}
-	title := source.Title + " (fork)"
-	groupPath := source.GroupPath
-	return h.forkSessionCmd(source, title, groupPath, source.ParentSessionID, source.ParentProjectPath)
-}
 
 // quickCreateSession creates a session instantly with auto-generated name and smart defaults.
 // When the cursor is on a session, it inherits that session's path and tool settings
@@ -10049,6 +10106,11 @@ func (h *Home) View() string {
 		errMsg := ErrorStyle.Render("⚠ "+h.err.Error()) + dismissHint
 		b.WriteString("\n")
 		b.WriteString(errMsg)
+	}
+
+	if h.quickForkPrompt.IsVisible() {
+		b.WriteString("\n")
+		b.WriteString(h.quickForkPrompt.View(h.width))
 	}
 
 	if h.storageWarning != "" {
