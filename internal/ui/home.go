@@ -322,6 +322,7 @@ type Home struct {
 
 	// Tab strip overlay (nil if disabled)
 	tabStrip *TabStripModel
+	pendingTabSwitchID string // ID of session to select on next tab strip update
 
 	// Storage warning (shown if storage initialization failed)
 	storageWarning string
@@ -3991,6 +3992,9 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+			// Queue tab strip switch for next tick
+			h.pendingTabSwitchID = msg.instance.ID
+
 			// Save both instances AND groups
 			// Use forceSave to bypass mtime check - forked session MUST persist
 			h.forceSaveInstances()
@@ -4853,6 +4857,16 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.tabStrip != nil {
 			h.instancesMu.RLock()
 			h.tabStrip.UpdateInstances(h.instances)
+			// Apply pending tab switch (set by fork/create operations)
+			if h.pendingTabSwitchID != "" {
+				for idx, inst := range h.tabStrip.instances {
+					if inst.ID == h.pendingTabSwitchID {
+						h.tabStrip.SelectTab(idx)
+						break
+					}
+				}
+				h.pendingTabSwitchID = ""
+			}
 			ackMap := make(map[string]bool, len(h.instances))
 			for _, inst := range h.instances {
 				ackMap[inst.ID] = inst.IsAcknowledged()
