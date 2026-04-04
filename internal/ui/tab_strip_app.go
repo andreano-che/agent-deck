@@ -2,11 +2,13 @@ package ui
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/asheshgoplani/agent-deck/internal/session"
 	"github.com/asheshgoplani/agent-deck/internal/statedb"
@@ -205,22 +207,40 @@ func (a *TabStripApp) tabIndexAtPosition(x, y int) int {
 	}
 
 	if a.tabStrip.layout == TabStripHorizontal {
-		// Horizontal: tabs are laid out left-to-right with equal width + 1 space separator.
-		// Each tab occupies tabWidth characters, plus 1 space between tabs.
-		tabWidth := a.width / n
-		if tabWidth < 8 {
-			tabWidth = 8
-		}
 		// Only respond on the tab text rows (row 0 = tab labels, row 1 = underline)
 		if y > 1 {
 			return -1
 		}
-		// Each tab takes tabWidth+1 chars (tab content + separator space), except last
-		idx := x / (tabWidth + 1)
-		if idx >= n {
-			idx = n - 1
+		// Compute actual visual width of each rendered tab to match viewHorizontal.
+		// Each tab is: " " + icon(with ANSI) + " " + name + " ", joined by " ".
+		cursor := 0
+		for i, inst := range a.tabStrip.instances {
+			icon := a.tabStrip.statusIcon(inst.Status, inst.ID)
+			color := statusColor(inst.Status)
+			iconRendered := lipgloss.NewStyle().Foreground(color).Render(icon)
+
+			tabWidth := a.width / n
+			if tabWidth < 8 {
+				tabWidth = 8
+			}
+			nameWidth := tabWidth - 4
+			if nameWidth < 3 {
+				nameWidth = 3
+			}
+			name := inst.Title
+			if len(name) > nameWidth {
+				name = name[:nameWidth]
+			}
+
+			tab := " " + iconRendered + " " + name + " "
+			visWidth := lipgloss.Width(tab)
+
+			if x >= cursor && x < cursor+visWidth {
+				return i
+			}
+			cursor += visWidth + 1 // +1 for the " " separator between tabs
 		}
-		return idx
+		return -1
 	}
 
 	// Vertical: each tab is one row, in order from top
@@ -230,7 +250,8 @@ func (a *TabStripApp) tabIndexAtPosition(x, y int) int {
 	return y
 }
 
-// writeTabSwitch writes the tab switch request files so the main app picks up the change.
+// writeTabSwitch writes the tab switch request files and detaches the tmux
+// client so the main app picks up the switch (same mechanism as keyboard tab-switch).
 func (a *TabStripApp) writeTabSwitch(id string) {
 	if a.tabFile == "" {
 		return
@@ -238,6 +259,7 @@ func (a *TabStripApp) writeTabSwitch(id string) {
 	dir := filepath.Dir(a.tabFile)
 	_ = os.WriteFile(a.tabFile, []byte(id), 0644)
 	_ = os.WriteFile(filepath.Join(dir, "tab_switch_request"), []byte(id), 0644)
+	_ = exec.Command("tmux", "detach-client").Run()
 }
 
 func (a *TabStripApp) animTick() tea.Cmd {
