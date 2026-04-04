@@ -83,6 +83,16 @@ func (a *TabStripApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Quit
 		}
 
+	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
+			idx := a.tabIndexAtPosition(msg.X, msg.Y)
+			if idx >= 0 && idx < len(a.tabStrip.instances) {
+				a.tabStrip.SelectTab(idx)
+				a.currentID = a.tabStrip.instances[idx].ID
+				a.writeTabSwitch(a.currentID)
+			}
+		}
+
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
@@ -184,6 +194,50 @@ func (a *TabStripApp) syncSelection() {
 			return
 		}
 	}
+}
+
+// tabIndexAtPosition maps a mouse click coordinate to a tab index.
+// Returns -1 if the click is outside any tab.
+func (a *TabStripApp) tabIndexAtPosition(x, y int) int {
+	n := len(a.tabStrip.instances)
+	if n == 0 {
+		return -1
+	}
+
+	if a.tabStrip.layout == TabStripHorizontal {
+		// Horizontal: tabs are laid out left-to-right with equal width + 1 space separator.
+		// Each tab occupies tabWidth characters, plus 1 space between tabs.
+		tabWidth := a.width / n
+		if tabWidth < 8 {
+			tabWidth = 8
+		}
+		// Only respond on the tab text rows (row 0 = tab labels, row 1 = underline)
+		if y > 1 {
+			return -1
+		}
+		// Each tab takes tabWidth+1 chars (tab content + separator space), except last
+		idx := x / (tabWidth + 1)
+		if idx >= n {
+			idx = n - 1
+		}
+		return idx
+	}
+
+	// Vertical: each tab is one row, in order from top
+	if y < 0 || y >= n {
+		return -1
+	}
+	return y
+}
+
+// writeTabSwitch writes the tab switch request files so the main app picks up the change.
+func (a *TabStripApp) writeTabSwitch(id string) {
+	if a.tabFile == "" {
+		return
+	}
+	dir := filepath.Dir(a.tabFile)
+	_ = os.WriteFile(a.tabFile, []byte(id), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "tab_switch_request"), []byte(id), 0644)
 }
 
 func (a *TabStripApp) animTick() tea.Cmd {
