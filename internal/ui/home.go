@@ -3881,18 +3881,26 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case forkRequestMsg:
-		// Alt+F was pressed in attach mode — find source and show prompt
+		// Alt+F was pressed in attach mode — instant fork without prompt
+		var source *session.Instance
 		h.instancesMu.RLock()
 		for _, inst := range h.instances {
 			if inst.ID == msg.sourceID {
-				h.forkRequestSource = inst
+				source = inst
 				break
 			}
 		}
 		h.instancesMu.RUnlock()
-		if h.forkRequestSource != nil && h.forkRequestSource.CanFork() {
-			h.quickForkPrompt.SetWidth(h.width)
-			h.quickForkPrompt.Show()
+		if source != nil {
+			// Refresh ClaudeDetectedAt: user was just inside the session, so the
+			// session is definitely alive.  The normal background scanner doesn't
+			// run during tea.Exec, causing CanFork() to return false after >5 min.
+			if source.ClaudeSessionID != "" {
+				source.ClaudeDetectedAt = time.Now()
+			}
+			if source.CanFork() {
+				return h, h.quickForkSession(source)
+			}
 		}
 		return h, nil
 
@@ -9380,11 +9388,16 @@ func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 	}
 
 	// --- Split-pane tab strip setup ---
-	// Create a narrow left pane in the target session running the tab-strip process
+	// Create a narrow left pane in the target session running the tab-strip process.
+	// Capture the pane ID so cleanupTabStrip can always kill this exact pane,
+	// even when the agent pane has already exited (avoiding orphaned tab strip).
 	exe, _ := os.Executable()
 	tabStripCmd := fmt.Sprintf("%s tab-strip --current=%s", exe, inst.ID)
-	_ = exec.Command("tmux", "split-window", "-v", "-b", "-l", "2",
-		"-t", tmuxSess.Name, tabStripCmd).Run()
+	tabStripPaneID := ""
+	if out, err := exec.Command("tmux", "split-window", "-v", "-b", "-l", "2",
+		"-t", tmuxSess.Name, "-P", "-F", "#{pane_id}", tabStripCmd).Output(); err == nil {
+		tabStripPaneID = strings.TrimSpace(string(out))
+	}
 	// Focus the bottom pane (the actual session content)
 	_ = exec.Command("tmux", "select-pane", "-D", "-t", tmuxSess.Name).Run()
 
@@ -9421,7 +9434,7 @@ func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 			if readErr == nil && len(data) > 0 {
 				targetID := strings.TrimSpace(string(data))
 				_ = os.Remove(switchFile)
-				h.cleanupTabStrip(tmuxSess.Name)
+				h.cleanupTabStrip(tmuxSess.Name, tabStripPaneID)
 
 				// Find target instance and re-attach (keep isAttaching=true)
 				h.instancesMu.RLock()
@@ -9440,7 +9453,7 @@ func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 			if forkErr == nil && len(forkData) > 0 {
 				sourceID := strings.TrimSpace(string(forkData))
 				_ = os.Remove(forkFile)
-				h.cleanupTabStrip(tmuxSess.Name)
+				h.cleanupTabStrip(tmuxSess.Name, tabStripPaneID)
 				h.isAttaching.Store(false)
 				return forkRequestMsg{sourceID: sourceID}
 			}
@@ -9453,7 +9466,7 @@ func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 		inst.MarkAccessed()
 
 		// Normal cleanup
-		h.cleanupTabStrip(tmuxSess.Name)
+		h.cleanupTabStrip(tmuxSess.Name, tabStripPaneID)
 
 		// Capture current pane CWD after attach returns for optional path follow.
 		currentWorkDir := strings.TrimSpace(tmuxSess.GetWorkDir())
@@ -9462,17 +9475,26 @@ func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 	})
 }
 
-// cleanupTabStrip removes the tab strip pane and unbinds Alt+N keys
-func (h *Home) cleanupTabStrip(sessionName string) {
-	// Kill the tab strip pane — it was created with split-window -b so it's the leftmost (smallest index).
-	// Get pane count first; only kill if there are 2+ panes (don't kill the last one)
-	countOut, _ := exec.Command("tmux", "list-panes", "-t", sessionName).Output()
-	if paneCount := len(strings.Split(strings.TrimSpace(string(countOut)), "\n")); paneCount >= 2 {
-		// Get the first pane ID
-		firstPaneOut, _ := exec.Command("tmux", "list-panes", "-t", sessionName, "-F", "#{pane_id}").Output()
-		lines := strings.Split(strings.TrimSpace(string(firstPaneOut)), "\n")
-		if len(lines) > 0 {
-			_ = exec.Command("tmux", "kill-pane", "-t", lines[0]).Run()
+// cleanupTabStrip removes the tab strip pane and unbinds Alt+N keys.
+// tabStripPaneID is the pane ID captured when the tab strip was created.
+// We always kill this specific pane — even if it's the last one remaining
+// (which means the agent pane already exited, and the session should be
+// destroyed so it can be cleanly restarted).
+func (h *Home) cleanupTabStrip(sessionName, tabStripPaneID string) {
+	if tabStripPaneID != "" {
+		// Kill the exact tab strip pane we created, regardless of pane count.
+		// If the agent pane already died, this kills the orphaned tab strip
+		// and lets tmux destroy the session (correct: enables auto-restart).
+		_ = exec.Command("tmux", "kill-pane", "-t", tabStripPaneID).Run()
+	} else {
+		// Fallback: no tracked pane ID — use the old heuristic.
+		countOut, _ := exec.Command("tmux", "list-panes", "-t", sessionName).Output()
+		if paneCount := len(strings.Split(strings.TrimSpace(string(countOut)), "\n")); paneCount >= 2 {
+			firstPaneOut, _ := exec.Command("tmux", "list-panes", "-t", sessionName, "-F", "#{pane_id}").Output()
+			lines := strings.Split(strings.TrimSpace(string(firstPaneOut)), "\n")
+			if len(lines) > 0 {
+				_ = exec.Command("tmux", "kill-pane", "-t", lines[0]).Run()
+			}
 		}
 	}
 

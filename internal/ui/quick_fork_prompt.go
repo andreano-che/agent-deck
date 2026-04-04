@@ -105,7 +105,7 @@ func (p *QuickForkPrompt) Update(msg tea.Msg) tea.Cmd {
 			return func() tea.Msg {
 				return QuickForkMsg{Name: name}
 			}
-		case "esc":
+		case "esc", "ctrl+c":
 			return func() tea.Msg {
 				return QuickForkCancelMsg{}
 			}
