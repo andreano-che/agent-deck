@@ -3967,7 +3967,7 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			opts.WorktreeBranch = branchName
 		}
 
-		return h, h.forkSessionCmdWithOptions(source, title, groupPath, opts, false)
+		return h, h.forkSessionCmdWithOptions(source, title, groupPath, opts, false, source.ID, source.ProjectPath)
 
 	case QuickForkCancelMsg:
 		h.quickForkPrompt.Hide()
@@ -8937,7 +8937,7 @@ func (h *Home) quickForkSession(source *session.Instance) tea.Cmd {
 	}
 	title := source.Title + " (fork)"
 	groupPath := source.GroupPath
-	return h.forkSessionCmd(source, title, groupPath)
+	return h.forkSessionCmd(source, title, groupPath, source.ID, source.ProjectPath)
 }
 
 // forkSessionCmd creates a forked session with the given title and group
