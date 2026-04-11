@@ -3,7 +3,6 @@ package web
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -129,14 +128,12 @@ func (b *tmuxPTYBridge) streamOutput() {
 		}
 
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				_ = b.writer.WriteJSON(wsServerMessage{
-					Type:      "status",
-					Event:     "session_closed",
-					SessionID: b.sessionID,
-					Time:      time.Now().UTC(),
-				})
-			}
+			_ = b.writer.WriteJSON(wsServerMessage{
+				Type:      "status",
+				Event:     "session_closed",
+				SessionID: b.sessionID,
+				Time:      time.Now().UTC(),
+			})
 			b.Close()
 			return
 		}

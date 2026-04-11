@@ -140,6 +140,12 @@ func (s *Server) handleSessionWS(w http.ResponseWriter, r *http.Request) {
 				SessionID: sessionID,
 				Time:      time.Now().UTC(),
 			})
+			// When the bridge's streamOutput goroutine exits (process died / EOF),
+			// close the WebSocket so the read-loop below terminates cleanly.
+			go func() {
+				<-bridge.done
+				conn.Close()
+			}()
 		}
 	}
 

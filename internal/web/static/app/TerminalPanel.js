@@ -329,6 +329,9 @@ export function TerminalPanel() {
                 scheduleFitAndResize(0)
               } else if (payload.event === 'session_closed') {
                 ctx.terminalAttached = false
+                ctx.wsReconnectEnabled = false
+                clearTimeout(ctx.reconnectTimer)
+                if (terminal) terminal.write('\r\n\x1b[33m[session ended]\x1b[0m Use the sidebar to restart or select another session.\r\n')
               }
             } else if (payload.type === 'error') {
               if (payload.code === 'TERMINAL_ATTACH_FAILED' || payload.code === 'TMUX_SESSION_NOT_FOUND') {
