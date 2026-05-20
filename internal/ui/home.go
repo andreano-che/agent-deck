@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -3939,8 +3940,8 @@ func (h *Home) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			opts = &session.ClaudeOptions{}
 		}
 
-		// Set up worktree if git repo
-		if git.IsGitRepo(source.ProjectPath) {
+		// Set up worktree if git repo (use bare-repo-aware guard per #742)
+		if git.IsGitRepoOrBareProjectRoot(source.ProjectPath) {
 			repoRoot, err := git.GetWorktreeBaseRoot(source.ProjectPath)
 			if err != nil {
 				h.setError(fmt.Errorf("failed to get repo root: %v", err))
@@ -6093,7 +6094,16 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return h, nil
 
 	case "alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9":
-		// Jump to Nth session in current group (1-indexed).
+		// Fork preference: route alt+N to tab strip when it has instances,
+		// otherwise fall back to upstream's "jump to Nth session in current group".
+		if h.tabStrip != nil && len(h.tabStrip.instances) > 0 {
+			idx := int(key[4] - '1')
+			h.tabStrip.SelectTab(idx)
+			if inst := h.tabStrip.SelectedInstance(); inst != nil && inst.Exists() {
+				return h, h.attachSession(inst)
+			}
+			return h, nil
+		}
 		n := int(key[len(key)-1] - '0')
 		if target := h.nthSessionInCurrentGroup(n); target >= 0 {
 			h.jumpToIndex(target)
@@ -6190,16 +6200,6 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else if item.Type == session.ItemTypeRemoteSession && item.RemoteSession != nil {
 				// Attach to remote session via SSH
 				return h, h.attachRemoteSession(item.RemoteName, item.RemoteSession.ID)
-			}
-		}
-		return h, nil
-
-	case "alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9":
-		if h.tabStrip != nil {
-			idx := int(key[4] - '1') // "alt+1" -> 0, "alt+2" -> 1, etc.
-			h.tabStrip.SelectTab(idx)
-			if inst := h.tabStrip.SelectedInstance(); inst != nil && inst.Exists() {
-				return h, h.attachSession(inst)
 			}
 		}
 		return h, nil

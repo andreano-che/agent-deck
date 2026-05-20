@@ -65,6 +65,9 @@ func (p *QuickForkPrompt) Hide() {
 
 // IsVisible returns whether the prompt is visible.
 func (p *QuickForkPrompt) IsVisible() bool {
+	if p == nil {
+		return false
+	}
 	return p.visible
 }
 
